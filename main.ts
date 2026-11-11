@@ -19,24 +19,33 @@
 //     one interval's improvement and the next's), while the change in the
 //     playing count barely predicts anything (correlation 0.025), so the
 //     rank itself is the signal, not the player count.
+//   - The endpoint velocity is noisy — it uses only the first and last
+//     reads of the window — so it is shrunk by 0.6 toward zero (mean
+//     reversion): the raw velocity overstates how far a game will travel.
 //   - A game's predicted rank at horizon h hours is its current rank plus
-//     velocity times h, clamped to 1..100. The forecast averages a Gaussian
-//     kernel (sigma 5 places) around that predicted rank over the horizons
-//     0, 12, 24, 48 and 72 hours, so a game near a place gets most of that
-//     place's probability and the spread grows with the horizon.
-//   - Each place's probabilities are normalised to sum to 0.8, leaving 0.2
-//     unnamed (shared by the games it does not name there). Naming
+//     the shrunk velocity times h, clamped to 1..100. The forecast averages
+//     a Gaussian kernel (sigma 5 places) around that predicted rank over
+//     the horizons 0, 12, 24, 48 and 72 hours, so a game near a place gets
+//     most of that place's probability and the spread grows with the
+//     horizon. The horizons are weighted short-heavy (2.0, 1.5, 1.0, 0.5,
+//     0.25): the reads nearest the history's end are the ones the forecast
+//     predicts best, and the long horizons mostly add noise.
+//   - Each place's probabilities are normalised to sum to 0.75, leaving
+//     0.25 unnamed (shared by the games it does not name there). Naming
 //     everything (mass 1.0) scores far worse: a missed place then costs the
 //     full floor, while the unnamed share hedges it.
 //   - Candidates are the current top 40 plus any game improving faster than
 //     0.3 ranks an hour, so a climber from outside the top 10 can enter it.
+//     Widening the candidates hurts: top 60 and top 100 score far worse,
+//     because the mass spreads over games that never reach the top 10.
 //
-// Backtested on the practice history at three cutoffs (20, 24 and 28 reads
-// of history, scored on the reads after), this beats the persistence
-// baseline by 11 to 16 log-score points at every cutoff (baseline -53.0,
-// -56.9 and -37.7; this model -42.1, -40.2 and -37.0), and the chosen
-// parameters sit in a flat region: sigma 4 to 7, a 24 to 72 hour velocity
-// window and mass 0.7 to 0.8 all score within a point of each other.
+// Tuned on the practice history (walk-forward cutoffs of 20/24/28 reads of
+// history, scored on the reads after; the harness reproduces the submitted
+// entry's scores -42.10/-40.18/-36.98 exactly). This version scores
+// -41.04/-39.33/-35.48 at those cutoffs, and also improves at two holdout
+// cutoffs never used for selection (22: -38.87 vs -40.27; 26: -36.77 vs
+// -37.90), so the gain is not fitted to the three cutoffs. Mean over five
+// cutoffs: -38.30 vs -39.49 for the submitted entry (+1.19 nats).
 //
 // Deterministic: no clock, no environment, no randomness. Node 22 standard
 // library only.
@@ -50,7 +59,9 @@ const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 const SIGMA = 5.0;
 const VELOCITY_HOURS = 48;
 const HORIZONS = [0, 12, 24, 48, 72];
-const TOTAL_MASS = 0.8;
+const HORIZON_WEIGHTS = [2.0, 1.5, 1.0, 0.5, 0.25];
+const VEL_SHRINK = 0.6;
+const TOTAL_MASS = 0.75;
 const CANDIDATE_TOP = 40;
 const FAST_IMPROVE = -0.3;
 
@@ -89,7 +100,11 @@ for (const read of reads) {
   }
 }
 
-/** A game's rank change per hour over the last VELOCITY_HOURS. */
+/**
+ * A game's rank change per hour over the last VELOCITY_HOURS, shrunk by
+ * VEL_SHRINK toward zero: the endpoint estimate is noisy, and unshrunk
+ * velocities overshoot the rank a game actually reaches.
+ */
 function velocity(uid: number): number {
   const pts = [...(rankHistory.get(uid) ?? [])].sort((a, b) => a[0] - b[0]);
   if (pts.length < 2) return 0;
@@ -98,7 +113,7 @@ function velocity(uid: number): number {
   const [t0, r0] = use[0]!;
   const [t1, r1] = use[use.length - 1]!;
   const dt = (t1 - t0) / 3600000;
-  return dt > 0 ? (r1 - r0) / dt : 0;
+  return dt > 0 ? ((r1 - r0) / dt) * VEL_SHRINK : 0;
 }
 
 const currentRank = new Map<number, number>();
@@ -119,16 +134,18 @@ const perPlace = new Map<number, Map<number, number>>();
 for (let place = 1; place <= task.places; place++) {
   perPlace.set(place, new Map());
 }
+const horizonWeightSum = HORIZON_WEIGHTS.reduce((a, b) => a + b, 0);
 for (const uid of candidates) {
   const r0 = currentRank.get(uid);
   if (r0 === undefined) continue;
   const v = velocity(uid);
-  for (const h of HORIZONS) {
+  for (let hi = 0; hi < HORIZONS.length; hi++) {
+    const h = HORIZONS[hi]!;
     const pred = Math.max(1, Math.min(100, r0 + v * h));
     for (let place = 1; place <= task.places; place++) {
       const w = Math.exp(-((pred - place) ** 2) / (2 * SIGMA * SIGMA));
       const map = perPlace.get(place)!;
-      map.set(uid, (map.get(uid) ?? 0) + w / HORIZONS.length);
+      map.set(uid, (map.get(uid) ?? 0) + (w * HORIZON_WEIGHTS[hi]!) / horizonWeightSum);
     }
   }
 }

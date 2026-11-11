@@ -142,7 +142,9 @@ for (let place = 1; place <= task.places; place++) {
   }
 }
 
-// The top 10, in order: the games with the best predicted rank at 24 hours.
+// The top 10, in order: the games with the best predicted rank at 24 hours
+// (the middle of the scored window, so the order is neither the chart as it
+// stood nor its far end).
 const predicted24 = [...candidates]
   .map((uid) => {
     const r0 = currentRank.get(uid);

@@ -31,12 +31,16 @@ The model is rank momentum:
   improvement and the next's), while the change in the playing count barely
   predicts anything (correlation 0.025), so the rank itself is the signal,
   not the player count.
-- A game's predicted rank at horizon h hours is its current rank plus
-  velocity times h, clamped to 1..100. The forecast averages a Gaussian
-  kernel (sigma 5 places) around that predicted rank over the horizons 0, 12,
-  24, 48 and 72 hours, so a game near a place gets most of that place's
-  probability and the spread grows with the horizon.
-- Each place's probabilities are normalised to sum to 0.8, leaving 0.2
+- The endpoint velocity is noisy — it uses only the first and last reads of
+  the window — so it is shrunk by 0.6 toward zero (mean reversion): the raw
+  velocity overstates how far a game will travel.
+- A game's predicted rank at horizon h hours is its current rank plus the
+  shrunk velocity times h, clamped to 1..100. The forecast averages a
+  Gaussian kernel (sigma 5 places) around that predicted rank over the
+  horizons 0, 12, 24, 48 and 72 hours, weighted short-heavy (2.0, 1.5, 1.0,
+  0.5, 0.25): the reads nearest the end of the history predict best, and the
+  long horizons mostly add noise.
+- Each place's probabilities are normalised to sum to 0.75, leaving 0.25
   unnamed (shared by the games it does not name there). Naming everything
   (mass 1.0) scores far worse: a missed place then costs the full floor,
   while the unnamed share hedges it.
@@ -57,6 +61,13 @@ to 16 log-score points at every cutoff:
 
 The chosen parameters sit in a flat region: sigma 4 to 7, a 24 to 72 hour
 velocity window and mass 0.7 to 0.8 all score within a point of each other.
+
+Tuned afterwards on the same walk-forward cutoffs plus two holdouts never
+used for selection (22 and 26 reads): shrinking the velocity by 0.6, weighting
+the horizons short-heavy and lowering the mass to 0.75 scores -41.04, -39.33
+and -35.48 at the selection cutoffs and -38.87 / -36.77 at the holdouts — a
+mean of -38.30 over the five cutoffs versus -39.49 for the table above
+(+1.19 nats).
 
 ## Run
 
